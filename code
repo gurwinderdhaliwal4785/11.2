@@ -1,0 +1,132 @@
+#include <Adafruit_Sensor.h>
+#include <WiFiNINA.h>
+#include <ArduinoHttpClient.h>
+#include <DHT.h>
+#include <DHT_U.h>
+
+char ssid[] = "Ekam";
+char pass[] = "ekam12345";
+
+char firebaseHost[] = "finalproject-8c54c-default-rtdb.firebaseio.com";
+; // Replace with your Firebase project's database URL (without "https://")
+String apiKey = "AIzaSyD1DZito8fL7Kpkrg27rY1TSOtasFm6weg"; // Replace with your Firebase project's API key
+char HOST_NAME[]="maker.ifttt.com";
+String PATH_NAME="/trigger/sensor_data/with/key/lIgWNjFVMYsfl7hyyEZptkeyHhbhKZllfTEbWWBclsZ";
+bool previousMoisture=false;
+const int sensorPin = A0;  // Soil moisture sensor pin
+const int DHTPin = 2;     // Digital pin connected to the DHT22 sensor
+const int DHTType = DHT22; // Change to DHT11 if you're using that sensor
+WiFiSSLClient wifiClient;
+HttpClient client = HttpClient(wifiClient, firebaseHost,443);
+DHT dht(DHTPin, DHTType);
+void sendHTTPRequest(String path){
+  if (!client.connected()) {              // Check if not connected to the server
+    if (client.connect(HOST_NAME, 443)) {  // Attempt to reconnect
+      Serial.println("Reconnected to server");
+    } else {
+      Serial.println("Connection retry failed");
+      return;  // Exit the function if reconnection fails
+    }
+  }
+  if (client.connected()) {
+    client.println("GET " + path + " HTTP/1.1");   // Send HTTP GET request
+    client.println("Host: " + String(HOST_NAME));  // Include host information
+    client.println("Connection: close");           // Close the connection after the request
+    client.println();                              // End HTTP header
+ 
+    while (client.connected() && !client.available()) {
+      // Waiting for response from server
+    }
+
+    while (client.available()) {
+      char c = client.read();  // Read response character by character
+      Serial.write(c);         // Print response to serial monitor
+    }
+
+    Serial.println();  // Print a blank line
+    Serial.println("Disconnected");
+  } else {
+    Serial.println("Client not connected.");
+  }
+}
+void sendDataToFirebase(float temperature, float humidity, float moisture_percentage) 
+{
+  if (client.connect(firebaseHost,443)) { // Use client.connect() with host and port
+    // Construct the Firebase URL with the path where you want to store data
+    String firebasePath = "/sensorData.json"; // Replace with your desired path
+    String url = "/" + firebasePath + "?auth=" + apiKey;
+
+    // Send the data to Firebase using HTTP PUT or POST
+    String dataToSend = "{\"temperature\": " + String(temperature, 2) + ", \"humidity\": " + String(humidity, 2) +", \"Moisture\": " + String(moisture_percentage, 2)+"}";
+    client.put(url, "application/json", dataToSend);
+
+    // Check for the server's response
+    int statusCode = client.responseStatusCode();
+    String response = client.responseBody();
+
+    Serial.print("HTTP Status Code: ");
+    Serial.println(statusCode);
+    Serial.print("Server Response: ");
+    Serial.println(response);
+
+    client.stop();
+  } else {
+    Serial.println("DATA NOT SENT");
+  }
+}
+void setup() {
+  Serial.begin(9600); // Initialize serial communication
+   while (!Serial);
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+
+  Serial.println("Connected to Wi-Fi");
+
+  dht.begin();        // Initialize DHT sensor
+}
+
+void loop() {
+  float moisturePercentage;
+  int sensorAnalog;
+
+  // Read soil moisture sensor
+  sensorAnalog = analogRead(sensorPin);
+  moisturePercentage = 100 - (sensorAnalog / 10.23); // Adjust the scale if needed
+
+ float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
+  if (isnan(temperature)) {
+    Serial.println("Failed to read from DHT sensor!");
+  } else {
+    Serial.print("Temperature: ");
+    Serial.print(temperature);
+    Serial.println(" °C");
+    Serial.print("Humidity: ");
+    Serial.print(humidity);
+    Serial.println("%");
+  }
+ sendDataToFirebase(temperature, humidity,moisturePercentage);
+  // Print soil moisture data
+
+  Serial.print("Moisture Percentage: ");
+  Serial.print(moisturePercentage);
+  Serial.println("%");
+   bool currentmoisture = moisturePercentage > 30;
+     if (currentmoisture != previousMoisture) {
+    previousMoisture = currentmoisture;
+
+    if (currentmoisture) {
+      // Transitioned to sunlight, send HTTP request for sunlight:
+      sendHTTPRequest(PATH_NAME);  // Call function to send HTTP request for sunlight event
+    } else {
+      // Transitioned to no sunlight, send HTTP request for no sunlight:
+      //sendHTTPRequest(PATH_NAME_NO_SUNLIGHT);  // Call function to send HTTP request for no sunlight event
+    }
+  }
+
+  delay(1000); // Adjust the delay as needed
+}
